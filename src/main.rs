@@ -11,6 +11,8 @@ use std::io::{self};
 use reqwest;
 use url::form_urlencoded::Serializer;
 use std::process;
+use ethereum_types::U256;
+use chrono::Local;
 
 fn hash_func(args: &[&[u8]]) -> Vec<u8> {
     let mut hasher = Sha256::new();
@@ -60,10 +62,17 @@ pub fn pokiohash_hash(password: &str, salt: &str) -> String {
     hex::encode(hash_bytes)
 }
 
-fn hash_to_difficulty(hash: &str) -> f64 {
+/*fn hash_to_difficulty(hash: &str) -> f64 {
     let hash_value = u128::from_str_radix(&hash[..32], 16).unwrap_or(0);
     let max_value = u128::MAX;
     (max_value as f64) / (hash_value as f64)
+}*/
+
+fn hash_to_difficulty(hash: &str) -> U256 {
+    let hash_value = U256::from_str_radix(hash, 16).unwrap_or(U256::zero());
+    let max_value = U256::MAX;
+    let difficulty = max_value / hash_value;
+    difficulty
 }
 
 fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: String, pserver: String) {
@@ -80,10 +89,10 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
 		let tdiff: u64 = parts[2].parse().unwrap_or(0);
 		let h: u64 = parts[0].parse().unwrap_or(0);
 		let coins: u64 = parts[3].parse().unwrap_or(0);
-		let target_diff = tdiff * coins;
+		let target_diff = U256::from(tdiff * coins);
 		
         let hash = pokiohash_hash(&password, &salt);
-        let difficulty = hash_to_difficulty(&hash) as u64;
+        let difficulty = hash_to_difficulty(&hash) as U256;
 
         {
             let mut count = hash_count.lock().unwrap();
@@ -91,7 +100,7 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
         }
 
         if difficulty > target_diff {
-            println!("Block found. Nonce: {}, Hash: {}", salt, hash);
+            println!("{} Block found. Nonce: {}, Hash: {}", Local::now().format("[%H:%M:%S]").to_string(), salt, hash);
 			
 			let url = Serializer::new(base_url.to_string())
 				.append_pair("height", &h.to_string())
@@ -104,10 +113,10 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
 			match reqwest::blocking::get(&url) {
 				Ok(response) => {
 					if let Ok(mining_response) = response.text() {
-						println!("Response: {}", mining_response.trim().to_string());
+						println!("{} Response: {}", Local::now().format("[%H:%M:%S]").to_string(), mining_response.trim().to_string());
 					}
 				}
-				Err(e) => println!("Error getting template: {}", e),
+				Err(e) => println!("{} Error getting template: {}", Local::now().format("[%H:%M:%S]").to_string(), e),
 			}
         }
     }
@@ -134,11 +143,11 @@ fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pse
 					if new_password_cmp.trim().to_string() != *password_lock
 					{
 						*password_lock = new_password.trim().to_string();
-						println!("New block template received: {}", *password_lock);
+						println!("{} New block template received: {}", Local::now().format("[%H:%M:%S]").to_string(), *password_lock);
 					}
                 }
             }
-            Err(e) => println!("Error getting template: {}", e),
+            Err(e) => println!("{} Error getting template: {}", Local::now().format("[%H:%M:%S]").to_string(), e),
         }
 
         thread::sleep(Duration::from_secs(10));
@@ -183,7 +192,7 @@ fn main() {
         process::exit(0);
     }
 
-    println!("Start mining with {} threads...", num_threads);
+    println!("{} Start mining with {} threads...", Local::now().format("[%H:%M:%S]").to_string(), num_threads);
 
     let hash_count = Arc::new(Mutex::new(0));
     let start_time = Instant::now();
@@ -225,7 +234,7 @@ fn main() {
                 let elapsed_secs = start_time.elapsed().as_secs_f64();
                 let total_hashes = *hash_count_clone.lock().unwrap();
                 let hashrate = total_hashes as f64 / elapsed_secs;
-                println!("Total Hashrate: {:.2} H/s", hashrate);
+                println!("{} Total Hashrate: {:.2} H/s", Local::now().format("[%H:%M:%S]").to_string(), hashrate);
             }
         }
     });

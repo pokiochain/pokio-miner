@@ -7,7 +7,7 @@ use std::env;
 use std::cmp::max;
 use sysinfo::{System, SystemExt, CpuExt};
 use rand::Rng;
-use std::io::{self, Write};
+use std::io::{self};
 use reqwest;
 use url::form_urlencoded::Serializer;
 use std::process;
@@ -113,7 +113,7 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
     }
 }
 
-fn fetch_password(password: Arc<Mutex<String>>, coins: Arc<Mutex<u64>>, hash_count: Arc<Mutex<u64>>, pserver: String) {
+fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String) {
 	let start_time = Instant::now();
 	let base_url = pserver + "/template.php?";
     loop {
@@ -190,18 +190,16 @@ fn main() {
 
     // template to mine
     let password = Arc::new(Mutex::new("0-0-1000-10000".to_string()));
-	let coins = Arc::new(Mutex::new(100));
 
     let mut handles = vec![];
 
     // updater thread
     let password_clone = Arc::clone(&password);
-	let coins_clone = Arc::clone(&coins);
 	let hash_count_clone = Arc::clone(&hash_count);
 	
 	let pserver = server.clone();
     handles.push(thread::spawn(move || {
-        fetch_password(password_clone, coins_clone, hash_count_clone, pserver);
+        fetch_password(password_clone, hash_count_clone, pserver);
     }));
 	
 	thread::sleep(Duration::from_secs(2));

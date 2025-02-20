@@ -9,6 +9,8 @@ use sysinfo::{System, SystemExt, CpuExt};
 use rand::Rng;
 use std::io::{self, Write};
 use reqwest;
+use url::form_urlencoded::Serializer;
+use std::process;
 
 fn hash_func(args: &[&[u8]]) -> Vec<u8> {
     let mut hasher = Sha256::new();
@@ -44,7 +46,7 @@ fn extract(buf: &Vec<Vec<u8>>) -> Vec<u8> {
     buf.last().unwrap().clone()
 }
 
-pub fn balloon(password: &str, salt: &str, space_cost: usize, time_cost: usize, delta: usize) -> Vec<u8> {
+pub fn pokiohash(password: &str, salt: &str, space_cost: usize, time_cost: usize, delta: usize) -> Vec<u8> {
     let salt_bytes = salt.as_bytes();
     let mut buf = vec![hash_func(&[password.as_bytes(), salt_bytes])];
     
@@ -53,8 +55,8 @@ pub fn balloon(password: &str, salt: &str, space_cost: usize, time_cost: usize, 
     extract(&buf)
 }
 
-pub fn balloon_hash(password: &str, salt: &str) -> String {
-    let hash_bytes = balloon(password, salt, 16, 20, 4);
+pub fn pokiohash_hash(password: &str, salt: &str) -> String {
+    let hash_bytes = pokiohash(password, salt, 16, 20, 4);
     hex::encode(hash_bytes)
 }
 
@@ -64,17 +66,24 @@ fn hash_to_difficulty(hash: &str) -> f64 {
     (max_value as f64) / (hash_value as f64)
 }
 
-fn mine(target_diff: f64, hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>) {
+fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: String, pserver: String) {
     let mut rng = rand::thread_rng();
-
+	let base_url = pserver + "mine.php?";
     loop {
         let nonce: u64 = rng.gen();
         let salt = format!("{:016x}", nonce);
 
         // read template global
         let password = password.lock().unwrap().clone();
-        let hash = balloon_hash(&password, &salt);
-        let difficulty = hash_to_difficulty(&hash);
+		
+		let parts: Vec<&str> = password.split('-').collect();
+		let tdiff: u64 = parts[2].parse().unwrap_or(0);
+		let h: u64 = parts[0].parse().unwrap_or(0);
+		let coins: u64 = parts[3].parse().unwrap_or(0);
+		let target_diff = tdiff * coins;
+		
+        let hash = pokiohash_hash(&password, &salt);
+        let difficulty = hash_to_difficulty(&hash) as u64;
 
         {
             let mut count = hash_count.lock().unwrap();
@@ -83,25 +92,48 @@ fn mine(target_diff: f64, hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<Strin
 
         if difficulty > target_diff {
             println!("Block found. Nonce: {}, Hash: {}", salt, hash);
-            //println!("Template used: {}", password);
+			
+			let url = Serializer::new(base_url.to_string())
+				.append_pair("height", &h.to_string())
+				.append_pair("miner", &wallet)
+				.append_pair("coins", &coins.to_string())
+				.append_pair("nonce", &salt)
+				.append_pair("hash", &hash)
+				.finish();
+
+			match reqwest::blocking::get(&url) {
+				Ok(response) => {
+					if let Ok(mining_response) = response.text() {
+						println!("Response: {}", mining_response.trim().to_string());
+					}
+				}
+				Err(e) => println!("Error getting template: {}", e),
+			}
         }
     }
 }
 
-fn fetch_password(password: Arc<Mutex<String>>, coins: Arc<Mutex<u64>>, hash_count: Arc<Mutex<u64>>) {
+fn fetch_password(password: Arc<Mutex<String>>, coins: Arc<Mutex<u64>>, hash_count: Arc<Mutex<u64>>, pserver: String) {
 	let start_time = Instant::now();
+	let base_url = pserver + "/template.php?";
     loop {
-        match reqwest::blocking::get("https://pokio.xyz/blocktemplate.txt") {
+		let tocoins = (*hash_count.lock().unwrap() as f64 / start_time.elapsed().as_secs_f64().round()) as u64;
+		let tocoins = max(1, (tocoins / 100) + 1);
+		let tocoins_str = tocoins.to_string();
+		
+		let url = Serializer::new(base_url.to_string())
+			.append_pair("coins", &tocoins_str.to_string())
+			.finish();
+
+		match reqwest::blocking::get(&url) {
             Ok(response) => {
                 if let Ok(new_password) = response.text() {
                     let mut password_lock = password.lock().unwrap();
-					let tocoins = (*hash_count.lock().unwrap() as f64 / start_time.elapsed().as_secs_f64().round()) as u64;
-					let tocoins = max(1, (tocoins / 100) + 1);
-					let tocoins_str = tocoins.to_string();
-					let new_password_cmp = format!("{}-{}", new_password.trim().to_string(), tocoins_str);
+					
+					let new_password_cmp = new_password.trim().to_string();
 					if new_password_cmp.trim().to_string() != *password_lock
 					{
-						*password_lock = format!("{}-{}", new_password.trim().to_string(), tocoins_str);
+						*password_lock = new_password.trim().to_string();
 						println!("New block template received: {}", *password_lock);
 					}
                 }
@@ -135,15 +167,29 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|t| t.parse::<usize>().ok())
         .unwrap_or(1);
+		
+	let wallet = args.iter().position(|arg| arg == "--w")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "default_wallet".to_string());
+		
+	let server = args.iter().position(|arg| arg == "--o")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "https://pokio.xyz/".to_string());
+		
+	if wallet == "default_wallet" {
+        println!("\nNo wallet.\n\nrun: pokiominer.exe --w YOU_WALLET");
+        process::exit(0);
+    }
 
     println!("Start mining with {} threads...", num_threads);
 
-    let target_diff = 10000.0;
     let hash_count = Arc::new(Mutex::new(0));
     let start_time = Instant::now();
 
     // template to mine
-    let password = Arc::new(Mutex::new("1-1-1-1".to_string()));
+    let password = Arc::new(Mutex::new("0-0-1000-10000".to_string()));
 	let coins = Arc::new(Mutex::new(100));
 
     let mut handles = vec![];
@@ -153,16 +199,21 @@ fn main() {
 	let coins_clone = Arc::clone(&coins);
 	let hash_count_clone = Arc::clone(&hash_count);
 	
+	let pserver = server.clone();
     handles.push(thread::spawn(move || {
-        fetch_password(password_clone, coins_clone, hash_count_clone);
+        fetch_password(password_clone, coins_clone, hash_count_clone, pserver);
     }));
+	
+	thread::sleep(Duration::from_secs(2));
 
     // mining threads
     for _ in 0..num_threads {
         let hash_count_clone = Arc::clone(&hash_count);
         let password_clone = Arc::clone(&password);
+		let pwallet = wallet.clone();
+		let pserver = server.clone();
         handles.push(thread::spawn(move || {
-            mine(target_diff, hash_count_clone, password_clone);
+            mine(hash_count_clone, password_clone, pwallet, pserver);
         }));
     }
 

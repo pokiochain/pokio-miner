@@ -1,0 +1,11 @@
+[package]
+name = "pokiominer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+sysinfo = "0.29"
+clap = { version = "4.0", features = ["derive"] }

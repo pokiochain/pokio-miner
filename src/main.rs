@@ -62,12 +62,6 @@ pub fn pokiohash_hash(password: &str, salt: &str) -> String {
     hex::encode(hash_bytes)
 }
 
-/*fn hash_to_difficulty(hash: &str) -> f64 {
-    let hash_value = u128::from_str_radix(&hash[..32], 16).unwrap_or(0);
-    let max_value = u128::MAX;
-    (max_value as f64) / (hash_value as f64)
-}*/
-
 fn hash_to_difficulty(hash: &str) -> U256 {
     let hash_value = U256::from_str_radix(hash, 16).unwrap_or(U256::zero());
     let max_value = U256::MAX;
@@ -82,14 +76,13 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
         let nonce: u64 = rng.gen();
         let salt = format!("{:016x}", nonce);
 
-        // read template global
         let password = password.lock().unwrap().clone();
 		
 		let parts: Vec<&str> = password.split('-').collect();
 		let tdiff: u64 = parts[2].parse().unwrap_or(0);
 		let h: u64 = parts[0].parse().unwrap_or(0);
 		let coins: u64 = parts[3].parse().unwrap_or(0);
-		let target_diff = U256::from(tdiff * coins);
+		let target_diff = U256::from(tdiff);
 		
         let hash = pokiohash_hash(&password, &salt);
         let difficulty = hash_to_difficulty(&hash) as U256;
@@ -128,11 +121,20 @@ fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pse
     loop {
 		let tocoins = (*hash_count.lock().unwrap() as f64 / start_time.elapsed().as_secs_f64().round()) as u64;
 		let tocoins = max(1, (tocoins / 100) + 1);
-		let tocoins_str = tocoins.to_string();
-		
+
+		let tocoins_str;
+
+		if start_time.elapsed().as_secs_f64() < 10.0 {
+			println!("{} time elapsed: {}", Local::now().format("[%H:%M:%S]"), start_time.elapsed().as_secs_f64());
+			tocoins_str = "10000".to_string();
+		} else {
+			tocoins_str = tocoins.to_string();
+		}
+
 		let url = Serializer::new(base_url.to_string())
-			.append_pair("coins", &tocoins_str.to_string())
+			.append_pair("coins", &tocoins_str)
 			.finish();
+
 
 		match reqwest::blocking::get(&url) {
             Ok(response) => {

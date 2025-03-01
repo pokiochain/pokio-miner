@@ -74,6 +74,7 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
 	let mut rng = rand::thread_rng();
 	let base_url = format!("{}/mining", pserver);
 	let client = Client::new();
+
 	loop {
 		let nonce: u64 = rng.gen();
 		let salt = format!("{:016x}", nonce);
@@ -102,12 +103,12 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
 			println!("{} Block found. Nonce: {}, Hash: {}", Local::now().format("[%H:%M:%S]").to_string(), salt, hash);
 			
 			let data = json!({
-				"jsonrpc": "2.0",
-				"id": "1",
-				"method": "submitBlock",
-				"coins": ncoins.to_string(),
-				"miner": &wallet,
-				"nonce": &salt
+					"jsonrpc": "2.0",
+					"id": "1",
+					"method": "submitBlock",
+					"coins": ncoins.to_string(),
+					"miner": &wallet,
+					"nonce": &salt
 			});
 			
 			match client.post(&base_url)
@@ -142,14 +143,12 @@ fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pse
 		};
 
 		let data = json!({
-			"jsonrpc": "2.0",
-			"id": "1",
-			"method": "getMiningTemplate",
-			"coins": tocoins_str,
-			"miner": &wallet
+				"jsonrpc": "2.0",
+				"id": "1",
+				"method": "getMiningTemplate",
+				"coins": tocoins_str,
+				"miner": &wallet
 		});
-		
-		println!("base url: {}", base_url);
 
 		match client.post(&base_url)
 			.header("Content-Type", "application/json")
@@ -169,7 +168,7 @@ fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pse
 							
 							let parts: Vec<&str> = npassword.split('-').collect();
 							let ntdiff: u64 = u64::from_str_radix(parts[2], 16).unwrap_or(0);
-							let nh: u64 = parts[0].parse().unwrap_or(0);
+							let nh: u64 = parts[3].parse().unwrap_or(0);
 							let ncoins: u64 = parts[1].parse().unwrap_or(0);
 							
 							println!("{} New template with height {}, diff: {}, target: {} POKIO", 
@@ -205,12 +204,7 @@ fn main() {
 	let server = args.iter().position(|arg| arg == "--o")
 		.and_then(|i| args.get(i + 1))
 		.map(|s| s.to_string())
-		.unwrap_or_else(|| "https://pokio.xyz".to_string());
-	
-	if !is_valid_eth_wallet(&wallet) {
-        eprintln!("Error: Invalid Ethereum wallet address.");
-        std::process::exit(1);
-    }
+		.unwrap_or_else(|| "http://pokio.xyz:3030".to_string());
 	
 	if wallet == "default_wallet" {
 		println!("Usage: pokiominer.exe --w your_wallet_address [OPTIONS]");
@@ -219,7 +213,7 @@ fn main() {
 		println!("  --w wallet	  Provide your wallet address.");
 		println!();
 		println!("Options:");
-		println!("  --o server_url  Specify the server URL to connect to. (default: https://pokio.xyz)");
+		println!("  --o server_url  Specify the server URL to connect to. (default: http://pokio.xyz:3030)");
 		println!("  --t threads	 Set the number of threads to use (default: 1).");
 		println!();
 		println!("Example:");
@@ -227,13 +221,19 @@ fn main() {
 		process::exit(0);
 	}
 	
+	if !is_valid_eth_wallet(&wallet) {
+        eprintln!("Error: Invalid Ethereum wallet address.");
+        std::process::exit(1);
+    }
+	
 	let mut sys = System::new_all();
 	sys.refresh_all();
 
-	println!("{}", "WARNING: EXPERIMENTAL MINER IN USE");
-	println!("{}", "\nYou are currently using the *experimental miner* for the Pokio project. Please note that this miner is strictly for pre-testnet testing purposes only. Any coins mined during this session have NO monetary value and will NOT be transferred to the mainnet.\n");
-	println!("{}", "We strongly advise limiting your use of this miner to no more than 30 minutes, just enough to send the necessary statistics and ensure everything is functioning correctly. This will greatly assist us in fine-tuning the system. Your participation, though temporary, is invaluable to the project's progress.\n");
-	println!("{}", "Thank you for helping us improve the Pokio experience!\n");
+	println!("{}", "WARNING: MINING IN TESTNET MODE");
+	println!("{}", "\nYou are currently mining on the *testnet* for the Pokio project. Please note that coins mined in the testnet environment do not have any real-world value and are strictly for testing purposes only. Coins will be exchanged with a ratio of 1:2 or 2:1, where 2 POKIO in testnet = 1 POKIO in mainnet.\n");
+	println!("{}", "The network is configured to mine approximately 1 block every hour, with optimizations in place to maximize the hashrate and the number of coins mined per block.\n");
+	println!("{}", "This mining session is intended for testing and development. Please be aware that any coins mined will not be transferable to the mainnet and have no monetary value.\n");
+	println!("{}", "Thank you for participating in the testnet mining! Your involvement helps us improve the system and ensure its proper functionality for future releases.\n");
 
 	let total_memory = sys.total_memory() / 1024 / 1024;
 	let cpu_model = sys.cpus().get(0).map(|cpu| cpu.brand().to_string()).unwrap_or("Unknown".to_string());
@@ -261,7 +261,7 @@ fn main() {
 		fetch_password(password_clone, hash_count_clone, pserver, pwallet);
 	}));
 	
-	thread::sleep(Duration::from_secs(2));
+	//thread::sleep(Duration::from_secs(2));
 
 	// mining threads
 	for _ in 0..num_threads {

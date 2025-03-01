@@ -230,7 +230,7 @@ fn main() {
 	sys.refresh_all();
 
 	println!("{}", "WARNING: MINING IN TESTNET MODE");
-	println!("{}", "\nYou are currently mining on the *testnet* for the Pokio project. Please note that coins mined in the testnet environment do not have any real-world value and are strictly for testing purposes only. Coins will be exchanged with a ratio of 1:2 or 2:1, where 2 POKIO in testnet = 1 POKIO in mainnet.\n");
+	println!("{}", "\nYou are currently mining on the *testnet* for the Pokio project. Please note that coins mined in the testnet environment do not have any real-world value and are strictly for testing purposes only. Coins will be exchanged with a ratio of 1:2, where 2 POKIO in testnet = 1 POKIO in mainnet.\n");
 	println!("{}", "The network is configured to mine approximately 1 block every hour, with optimizations in place to maximize the hashrate and the number of coins mined per block.\n");
 	println!("{}", "This mining session is intended for testing and development. Please be aware that any coins mined will not be transferable to the mainnet and have no monetary value.\n");
 	println!("{}", "Thank you for participating in the testnet mining! Your involvement helps us improve the system and ensure its proper functionality for future releases.\n");

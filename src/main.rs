@@ -134,10 +134,10 @@ fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pse
 
 	loop {
 		let hr = (*hash_count.lock().unwrap() as f64 / start_time.elapsed().as_secs_f64().round()) as u64;
-		let tocoins = max(1, (hr / 100) + 1);
+		let tocoins = max(1, (hr / 1000) + 1);
 
 		let tocoins_str = if start_time.elapsed().as_secs_f64() < 10.0 {
-			"10000".to_string()
+			"100".to_string()
 		} else {
 			tocoins.to_string()
 		};
@@ -247,7 +247,7 @@ fn main() {
 	let start_time = Instant::now();
 
 	// template to mine
-	let password = Arc::new(Mutex::new("0-0-1000-10000".to_string()));
+	let password = Arc::new(Mutex::new("0-0-100000000-100".to_string()));
 
 	let mut handles = vec![];
 

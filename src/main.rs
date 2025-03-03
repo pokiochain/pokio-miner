@@ -14,6 +14,9 @@ use ethereum_types::U256;
 use chrono::Local;
 use reqwest::blocking::Client;
 use serde_json::json;
+use nng::options::protocol::pubsub::Subscribe;
+use nng::options::Options;
+use nng::{Protocol, Socket};
 
 fn hash_func(args: &[&[u8]]) -> Vec<u8> {
 	let mut hasher = Sha256::new();
@@ -72,7 +75,7 @@ fn hash_to_difficulty(hash: &str) -> U256 {
 
 fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: String, pserver: String) {
 	let mut rng = rand::thread_rng();
-	let base_url = format!("{}/mining", pserver);
+	let base_url = format!("http://{}:3030/mining", pserver);
 	let client = Client::new();
 
 	loop {
@@ -129,7 +132,7 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
 
 fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String) {
 	let start_time = Instant::now();
-	let base_url = format!("{}/mining", pserver);
+	let base_url = format!("http://{}:3030/mining", pserver);
 	let client = Client::new();
 
 	loop {
@@ -188,6 +191,76 @@ fn is_valid_eth_wallet(wallet: &str) -> bool {
     wallet.len() == 42 && wallet.starts_with("0x") && wallet[2..].chars().all(|c| c.is_digit(16))
 }
 
+fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String) {
+	let start_time = Instant::now();
+	let base_url = format!("http://{}:3030/mining", pserver);
+	let client = Client::new();
+    thread::spawn(move || {
+        let socket = Socket::new(Protocol::Sub0).expect("Can't connect to NNG server");
+        let _ = socket.set_opt::<Subscribe>(vec![]);
+		let nng_url = format!("tcp://{}:5555", pserver);
+        socket
+            .dial(&nng_url)
+            .expect("Can't connect to NNG server");
+        println!("{} Connected to NNG server", Local::now().format("[%H:%M:%S]").to_string());
+        loop {
+            match socket.recv() {
+                Ok(_msg) => {
+					let hr = (*hash_count.lock().unwrap() as f64 / start_time.elapsed().as_secs_f64().round()) as u64;
+					let tocoins = max(1, (hr / 1000) + 1);
+
+					let tocoins_str = if start_time.elapsed().as_secs_f64() < 10.0 {
+						"100".to_string()
+					} else {
+						tocoins.to_string()
+					};
+
+					let data = json!({
+							"jsonrpc": "2.0",
+							"id": "1",
+							"method": "getMiningTemplate",
+							"coins": tocoins_str,
+							"miner": &wallet
+					});
+
+					match client.post(&base_url)
+						.header("Content-Type", "application/json")
+						.json(&data)
+						.send()
+					{
+						Ok(response) => {
+							if let Ok(json) = response.json::<serde_json::Value>() {
+								if let Some(new_password) = json.get("result").and_then(|r| r.as_str()) {
+									let mut password_lock = password.lock().unwrap();
+									
+									let new_password_cmp = new_password.trim().to_string();
+									if new_password_cmp != *password_lock {
+										*password_lock = new_password_cmp.clone();
+										let npassword = new_password_cmp.clone();
+										
+										
+										let parts: Vec<&str> = npassword.split('-').collect();
+										let ntdiff: u64 = u64::from_str_radix(parts[2], 16).unwrap_or(0);
+										let nh: u64 = parts[3].parse().unwrap_or(0);
+										let ncoins: u64 = parts[1].parse().unwrap_or(0);
+										
+										println!("{} New template with height {}, diff: {}, target: {} POKIO", 
+											Local::now().format("[%H:%M:%S]").to_string(), nh, ntdiff, ncoins);
+									}
+								}
+							}
+						}
+						Err(e) => println!("{} Error getting template: {}", Local::now().format("[%H:%M:%S]").to_string(), e),
+					}
+                }
+                Err(e) => {
+                    eprintln!("{} Error getting NNG message: {}",Local::now().format("[%H:%M:%S]").to_string(), e);
+                }
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    });
+}
 
 fn main() {
 	let args: Vec<String> = env::args().collect();
@@ -204,7 +277,7 @@ fn main() {
 	let server = args.iter().position(|arg| arg == "--o")
 		.and_then(|i| args.get(i + 1))
 		.map(|s| s.to_string())
-		.unwrap_or_else(|| "http://pokio.xyz:3030".to_string());
+		.unwrap_or_else(|| "pokio.xyz".to_string());
 	
 	if wallet == "default_wallet" {
 		println!("Usage: pokiominer.exe --w your_wallet_address [OPTIONS]");
@@ -213,7 +286,7 @@ fn main() {
 		println!("  --w wallet	  Provide your wallet address.");
 		println!();
 		println!("Options:");
-		println!("  --o server_url  Specify the server URL to connect to. (default: http://pokio.xyz:3030)");
+		println!("  --o server_url  Specify the server URL to connect to. (default: pokio.xyz)");
 		println!("  --t threads	 Set the number of threads to use (default: 1).");
 		println!();
 		println!("Example:");
@@ -260,6 +333,13 @@ fn main() {
 	handles.push(thread::spawn(move || {
 		fetch_password(password_clone, hash_count_clone, pserver, pwallet);
 	}));
+	
+	let password_clone = Arc::clone(&password);
+	let hash_count_clone = Arc::clone(&hash_count);
+	
+	let pserver = server.clone();
+	let pwallet = wallet.clone();
+	connect_to_nng_server(password_clone, hash_count_clone, pserver, pwallet);
 	
 	//thread::sleep(Duration::from_secs(2));
 

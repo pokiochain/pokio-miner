@@ -2,7 +2,7 @@ use sha2::{Digest, Sha256};
 use hex;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Instant, Duration};
+use std::time::{Instant, Duration, SystemTime, UNIX_EPOCH};
 use std::env;
 use std::cmp::max;
 use sysinfo::{System, SystemExt, CpuExt};
@@ -73,9 +73,9 @@ fn hash_to_difficulty(hash: &str) -> U256 {
 	difficulty
 }
 
-fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: String, pserver: String) {
+fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: String, pserver: String, clientid: String) {
 	let mut rng = rand::thread_rng();
-	let base_url = format!("http://{}:3030/mining", pserver);
+	let base_url = format!("http://{}:30303/mining", pserver);
 	let client = Client::new();
 
 	loop {
@@ -107,7 +107,7 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
 			
 			let data = json!({
 					"jsonrpc": "2.0",
-					"id": "1",
+					"id": clientid,
 					"method": "submitBlock",
 					"coins": ncoins.to_string(),
 					"miner": &wallet,
@@ -130,14 +130,14 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
 	}
 }
 
-fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String) {
+fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String, clientid: String) {
 	let start_time = Instant::now();
-	let base_url = format!("http://{}:3030/mining", pserver);
+	let base_url = format!("http://{}:30303/mining", pserver);
 	let client = Client::new();
 
 	loop {
 		let hr = (*hash_count.lock().unwrap() as f64 / start_time.elapsed().as_secs_f64().round()) as u64;
-		let tocoins = max(1, (hr / 1000) + 1);
+		let tocoins = max(10, (hr / 5000) + 1);
 
 		let tocoins_str = if start_time.elapsed().as_secs_f64() < 10.0 {
 			"100".to_string()
@@ -147,7 +147,7 @@ fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pse
 
 		let data = json!({
 				"jsonrpc": "2.0",
-				"id": "1",
+				"id": clientid,
 				"method": "getMiningTemplate",
 				"coins": tocoins_str,
 				"miner": &wallet
@@ -191,9 +191,25 @@ fn is_valid_eth_wallet(wallet: &str) -> bool {
     wallet.len() == 42 && wallet.starts_with("0x") && wallet[2..].chars().all(|c| c.is_digit(16))
 }
 
-fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String) {
+fn generate_random_string(length: usize) -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_micros()
+        .to_string();
+
+    let mut hasher = Sha256::new();
+    hasher.update(timestamp.as_bytes());
+    let hash = hasher.finalize();
+
+    let hex_hash = format!("{:x}", hash);
+    hex_hash[..length].to_string()
+}
+
+
+fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String, clientid: String) {
 	let start_time = Instant::now();
-	let base_url = format!("http://{}:3030/mining", pserver);
+	let base_url = format!("http://{}:30303/mining", pserver);
 	let client = Client::new();
     thread::spawn(move || {
         let socket = Socket::new(Protocol::Sub0).expect("Can't connect to NNG server");
@@ -207,7 +223,7 @@ fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64
             match socket.recv() {
                 Ok(_msg) => {
 					let hr = (*hash_count.lock().unwrap() as f64 / start_time.elapsed().as_secs_f64().round()) as u64;
-					let tocoins = max(1, (hr / 1000) + 1);
+					let tocoins = max(10, (hr / 5000) + 1);
 
 					let tocoins_str = if start_time.elapsed().as_secs_f64() < 10.0 {
 						"100".to_string()
@@ -217,7 +233,7 @@ fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64
 
 					let data = json!({
 							"jsonrpc": "2.0",
-							"id": "1",
+							"id": clientid,
 							"method": "getMiningTemplate",
 							"coins": tocoins_str,
 							"miner": &wallet
@@ -302,12 +318,9 @@ fn main() {
 	let mut sys = System::new_all();
 	sys.refresh_all();
 
-	println!("{}", "WARNING: MINING IN TESTNET MODE");
-	println!("{}", "\nYou are currently mining on the *testnet* for the Pokio project. Please note that coins mined in the testnet environment do not have any real-world value and are strictly for testing purposes only. Coins will be exchanged with a ratio of 1:2, where 2 POKIO in testnet = 1 POKIO in mainnet.\n");
-	println!("{}", "The network is configured to mine approximately 1 block every hour, with optimizations in place to maximize the hashrate and the number of coins mined per block.\n");
-	println!("{}", "This mining session is intended for testing and development. Please be aware that any coins mined will not be transferable to the mainnet and have no monetary value.\n");
-	println!("{}", "Thank you for participating in the testnet mining! Your involvement helps us improve the system and ensure its proper functionality for future releases.\n");
-
+	println!("POKIO MINER 0.1");
+	println!("");
+	
 	let total_memory = sys.total_memory() / 1024 / 1024;
 	let cpu_model = sys.cpus().get(0).map(|cpu| cpu.brand().to_string()).unwrap_or("Unknown".to_string());
 
@@ -321,6 +334,7 @@ fn main() {
 
 	// template to mine
 	let password = Arc::new(Mutex::new("0-0-100000000-100".to_string()));
+	let client_id = generate_random_string(8).to_string();
 
 	let mut handles = vec![];
 
@@ -330,8 +344,9 @@ fn main() {
 	
 	let pserver = server.clone();
 	let pwallet = wallet.clone();
+	let clientid = client_id.clone();
 	handles.push(thread::spawn(move || {
-		fetch_password(password_clone, hash_count_clone, pserver, pwallet);
+		fetch_password(password_clone, hash_count_clone, pserver, pwallet, clientid);
 	}));
 	
 	let password_clone = Arc::clone(&password);
@@ -339,7 +354,8 @@ fn main() {
 	
 	let pserver = server.clone();
 	let pwallet = wallet.clone();
-	connect_to_nng_server(password_clone, hash_count_clone, pserver, pwallet);
+	let clientid = client_id.clone();
+	connect_to_nng_server(password_clone, hash_count_clone, pserver, pwallet, clientid);
 	
 	//thread::sleep(Duration::from_secs(2));
 
@@ -349,8 +365,9 @@ fn main() {
 		let password_clone = Arc::clone(&password);
 		let pwallet = wallet.clone();
 		let pserver = server.clone();
+		let clientid = client_id.clone();
 		handles.push(thread::spawn(move || {
-			mine(hash_count_clone, password_clone, pwallet, pserver);
+			mine(hash_count_clone, password_clone, pwallet, pserver, clientid);
 		}));
 	}
 

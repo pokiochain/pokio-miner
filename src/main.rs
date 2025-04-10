@@ -18,54 +18,58 @@ use nng::options::protocol::pubsub::Subscribe;
 use nng::options::Options;
 use nng::{Protocol, Socket};
 
+#[inline(always)]
 fn hash_func(args: &[&[u8]]) -> Vec<u8> {
-	let mut hasher = Sha256::new();
-	for arg in args {
-		hasher.update(arg);
-	}
-	hasher.finalize().to_vec()
+    let mut hasher = Sha256::new();
+    for arg in args {
+        hasher.update(arg);
+    }
+    hasher.finalize().to_vec()
 }
 
 fn expand(buf: &mut Vec<Vec<u8>>, space_cost: usize) {
-	for s in 1..space_cost {
-		let new_hash = hash_func(&[&buf[s - 1]]);
-		buf.push(new_hash);
-	}
+    buf.reserve(space_cost - 1);
+    for s in 1..space_cost {
+        let new_hash = hash_func(&[&buf[s - 1]]);
+        buf.push(new_hash);
+    }
 }
 
 fn mix(buf: &mut Vec<Vec<u8>>, delta: usize, salt: &[u8], space_cost: usize, time_cost: usize) {
-	for _ in 0..time_cost {
-		for s in 0..space_cost {
-			let prev = buf[s.saturating_sub(1)].clone();
-			buf[s] = hash_func(&[&prev, &buf[s]]);
-			
-			for i in 0..delta {
-				let idx_block = hash_func(&[salt, &i.to_le_bytes()]);
-				let other = usize::from_le_bytes(idx_block[..8].try_into().unwrap()) % space_cost;
-				buf[s] = hash_func(&[&buf[s], &buf[other]]);
-			}
-		}
-	}
+    for _ in 0..time_cost {
+        for s in 0..space_cost {
+            let prev = &buf[s.saturating_sub(1)];
+            buf[s] = hash_func(&[prev, &buf[s]]);
+            
+            for i in 0..delta {
+                let idx_block = hash_func(&[salt, &i.to_le_bytes()]);
+                let other = usize::from_le_bytes(idx_block[..8].try_into().unwrap()) % space_cost;
+                buf[s] = hash_func(&[&buf[s], &buf[other]]);
+            }
+        }
+    }
 }
 
-fn extract(buf: &Vec<Vec<u8>>) -> Vec<u8> {
-	buf.last().unwrap().clone()
+fn extract(buf: &[Vec<u8>]) -> Vec<u8> {
+    buf.last().unwrap().to_vec()
 }
 
 pub fn pokiohash(password: &str, salt: &str, space_cost: usize, time_cost: usize, delta: usize) -> Vec<u8> {
-	let salt_bytes = salt.as_bytes();
-	let mut buf = vec![hash_func(&[password.as_bytes(), salt_bytes])];
-	
-	expand(&mut buf, space_cost);
-	mix(&mut buf, delta, salt_bytes, space_cost, time_cost);
-	extract(&buf)
+    let salt_bytes = salt.as_bytes();
+    let mut buf = Vec::with_capacity(space_cost);
+    buf.push(hash_func(&[password.as_bytes(), salt_bytes]));
+    
+    expand(&mut buf, space_cost);
+    mix(&mut buf, delta, salt_bytes, space_cost, time_cost);
+    extract(&buf)
 }
 
 pub fn pokiohash_hash(password: &str, salt: &str) -> String {
-	let hash_bytes = pokiohash(password, salt, 16, 20, 4);
-	hex::encode(hash_bytes)
+    let hash_bytes = pokiohash(password, salt, 16, 20, 4);
+    hex::encode(hash_bytes)
 }
 
+#[inline(always)]
 fn hash_to_difficulty(hash: &str) -> U256 {
 	let hash_value = U256::from_str_radix(hash, 16).unwrap_or(U256::zero());
 	let max_value = U256::MAX;
@@ -130,63 +134,6 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
 	}
 }
 
-fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String, clientid: String) {
-	let start_time = Instant::now();
-	let base_url = format!("http://{}:30303/mining", pserver);
-	let client = Client::new();
-
-	loop {
-		let hr = (*hash_count.lock().unwrap() as f64 / start_time.elapsed().as_secs_f64().round()) as u64;
-		let tocoins = max(10, (hr / 5000) + 1);
-
-		let tocoins_str = if start_time.elapsed().as_secs_f64() < 10.0 {
-			"100".to_string()
-		} else {
-			tocoins.to_string()
-		};
-
-		let data = json!({
-				"jsonrpc": "2.0",
-				"id": clientid,
-				"method": "getMiningTemplate",
-				"coins": tocoins_str,
-				"miner": &wallet
-		});
-
-		match client.post(&base_url)
-			.header("Content-Type", "application/json")
-			.json(&data)
-			.send()
-		{
-			Ok(response) => {
-				if let Ok(json) = response.json::<serde_json::Value>() {
-					if let Some(new_password) = json.get("result").and_then(|r| r.as_str()) {
-						let mut password_lock = password.lock().unwrap();
-						
-						let new_password_cmp = new_password.trim().to_string();
-						if new_password_cmp != *password_lock {
-							*password_lock = new_password_cmp.clone();
-							let npassword = new_password_cmp.clone();
-							
-							
-							let parts: Vec<&str> = npassword.split('-').collect();
-							let ntdiff: u64 = u64::from_str_radix(parts[2], 16).unwrap_or(0);
-							let nh: u64 = parts[3].parse().unwrap_or(0);
-							let ncoins: u64 = parts[1].parse().unwrap_or(0);
-							
-							println!("{} New template with height {}, diff: {}, target: {} POKIO", 
-								Local::now().format("[%H:%M:%S]").to_string(), nh, ntdiff, ncoins);
-						}
-					}
-				}
-			}
-			Err(e) => println!("{} Error getting template: {}", Local::now().format("[%H:%M:%S]").to_string(), e),
-		}
-
-		thread::sleep(Duration::from_secs(10));
-	}
-}
-
 fn is_valid_eth_wallet(wallet: &str) -> bool {
     wallet.len() == 42 && wallet.starts_with("0x") && wallet[2..].chars().all(|c| c.is_digit(16))
 }
@@ -207,7 +154,7 @@ fn generate_random_string(length: usize) -> String {
 }
 
 
-fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String, clientid: String) {
+fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String, clientid: String, intensity: u64,) {
 	let start_time = Instant::now();
 	let base_url = format!("http://{}:30303/mining", pserver);
 	let client = Client::new();
@@ -223,7 +170,7 @@ fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64
             match socket.recv() {
                 Ok(_msg) => {
 					let hr = (*hash_count.lock().unwrap() as f64 / start_time.elapsed().as_secs_f64().round()) as u64;
-					let tocoins = max(10, (hr / 5000) + 1);
+					let tocoins = max(10, (hr / intensity) + 1);
 
 					let tocoins_str = if start_time.elapsed().as_secs_f64() < 10.0 {
 						"100".to_string()
@@ -294,6 +241,19 @@ fn main() {
 		.and_then(|i| args.get(i + 1))
 		.map(|s| s.to_string())
 		.unwrap_or_else(|| "pokio.xyz".to_string());
+		
+	let intensity = args.iter().position(|arg| arg == "--i")
+		.and_then(|i| args.get(i + 1))
+		.and_then(|s| s.parse::<u64>().ok())
+		.unwrap_or(3);
+	
+	let intensity_v: u64 = match intensity {
+		1 => 4000,
+		2 => 3000,
+		3 => 2000,
+		4 => 1000,
+		_ => 500,
+	};
 	
 	if wallet == "default_wallet" {
 		println!("Usage: pokiominer.exe --w your_wallet_address [OPTIONS]");
@@ -303,7 +263,8 @@ fn main() {
 		println!();
 		println!("Options:");
 		println!("  --o server_url  Specify the server URL to connect to. (default: pokio.xyz)");
-		println!("  --t threads	 Set the number of threads to use (default: 1).");
+		println!("  --t threads     Set the number of threads to use (default: 1).");
+		println!("  --i intensity   Set the intensity (from 1 [more coins] to 5 [more blocks]) (default: 3).");
 		println!();
 		println!("Example:");
 		println!("  pokiominer.exe --w your_wallet_address --t 4");
@@ -345,17 +306,7 @@ fn main() {
 	let pserver = server.clone();
 	let pwallet = wallet.clone();
 	let clientid = client_id.clone();
-	handles.push(thread::spawn(move || {
-		fetch_password(password_clone, hash_count_clone, pserver, pwallet, clientid);
-	}));
-	
-	let password_clone = Arc::clone(&password);
-	let hash_count_clone = Arc::clone(&hash_count);
-	
-	let pserver = server.clone();
-	let pwallet = wallet.clone();
-	let clientid = client_id.clone();
-	connect_to_nng_server(password_clone, hash_count_clone, pserver, pwallet, clientid);
+	connect_to_nng_server(password_clone, hash_count_clone, pserver, pwallet, clientid, intensity_v);
 	
 	//thread::sleep(Duration::from_secs(2));
 

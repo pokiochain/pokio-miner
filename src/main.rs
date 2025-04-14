@@ -277,7 +277,7 @@ fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64
                     eprintln!("{} Error getting NNG message: {}",Local::now().format("[%H:%M:%S]").to_string(), e);
                 }
             }
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(25));
         }
     });
 }

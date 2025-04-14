@@ -134,6 +134,63 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
 	}
 }
 
+fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String, clientid: String, intensity: u64) {
+	let start_time = Instant::now();
+	let base_url = format!("http://{}:30303/mining", pserver);
+	let client = Client::new();
+
+	loop {
+		let hr = (*hash_count.lock().unwrap() as f64 / start_time.elapsed().as_secs_f64().round()) as u64;
+		let tocoins = max(10, (hr / intensity) + 1);
+
+		let tocoins_str = if start_time.elapsed().as_secs_f64() < 10.0 {
+			"100".to_string()
+		} else {
+			tocoins.to_string()
+		};
+
+		let data = json!({
+				"jsonrpc": "2.0",
+				"id": clientid,
+				"method": "getMiningTemplate",
+				"coins": tocoins_str,
+				"miner": &wallet
+		});
+
+		match client.post(&base_url)
+			.header("Content-Type", "application/json")
+			.json(&data)
+			.send()
+		{
+			Ok(response) => {
+				if let Ok(json) = response.json::<serde_json::Value>() {
+					if let Some(new_password) = json.get("result").and_then(|r| r.as_str()) {
+						let mut password_lock = password.lock().unwrap();
+						
+						let new_password_cmp = new_password.trim().to_string();
+						if new_password_cmp != *password_lock {
+							*password_lock = new_password_cmp.clone();
+							let npassword = new_password_cmp.clone();
+							
+							
+							let parts: Vec<&str> = npassword.split('-').collect();
+							let ntdiff: u64 = u64::from_str_radix(parts[2], 16).unwrap_or(0);
+							let nh: u64 = parts[3].parse().unwrap_or(0);
+							let ncoins: u64 = parts[1].parse().unwrap_or(0);
+							
+							println!("{} New template with height {}, diff: {}, target: {} POKIO", 
+								Local::now().format("[%H:%M:%S]").to_string(), nh, ntdiff, ncoins);
+						}
+					}
+				}
+			}
+			Err(e) => println!("{} Error getting template: {}", Local::now().format("[%H:%M:%S]").to_string(), e),
+		}
+
+		thread::sleep(Duration::from_secs(10));
+	}
+}
+
 fn is_valid_eth_wallet(wallet: &str) -> bool {
     wallet.len() == 42 && wallet.starts_with("0x") && wallet[2..].chars().all(|c| c.is_digit(16))
 }
@@ -154,7 +211,7 @@ fn generate_random_string(length: usize) -> String {
 }
 
 
-fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String, clientid: String, intensity: u64,) {
+fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String, clientid: String, intensity: u64) {
 	let start_time = Instant::now();
 	let base_url = format!("http://{}:30303/mining", pserver);
 	let client = Client::new();
@@ -298,6 +355,17 @@ fn main() {
 	let client_id = generate_random_string(8).to_string();
 
 	let mut handles = vec![];
+	
+	// updater thread
+	let password_clone = Arc::clone(&password);
+	let hash_count_clone = Arc::clone(&hash_count);
+	
+	let pserver = server.clone();
+	let pwallet = wallet.clone();
+	let clientid = client_id.clone();
+	handles.push(thread::spawn(move || {
+		fetch_password(password_clone, hash_count_clone, pserver, pwallet, clientid, intensity_v);
+	}));
 
 	// updater thread
 	let password_clone = Arc::clone(&password);

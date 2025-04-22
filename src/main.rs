@@ -134,7 +134,7 @@ fn mine(hash_count: Arc<Mutex<u64>>, password: Arc<Mutex<String>>, wallet: Strin
 	}
 }
 
-fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String, clientid: String, intensity: u64) {
+fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pserver: String, wallet: String, clientid: String, intensity: u64, http_timing: u64) {
 	let start_time = Instant::now();
 	let base_url = format!("http://{}:30303/mining", pserver);
 	let client = Client::new();
@@ -187,7 +187,7 @@ fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pse
 			Err(e) => println!("{} Error getting template: {}", Local::now().format("[%H:%M:%S]").to_string(), e),
 		}
 
-		thread::sleep(Duration::from_secs(10));
+		thread::sleep(Duration::from_secs(http_timing));
 	}
 }
 
@@ -284,6 +284,9 @@ fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64
 
 fn main() {
 	let args: Vec<String> = env::args().collect();
+	
+	let http_mode = args.iter().any(|arg| arg == "--http") as u8;
+	
 	let num_threads = args.iter().position(|arg| arg == "--t")
 		.and_then(|i| args.get(i + 1))
 		.and_then(|t| t.parse::<usize>().ok())
@@ -293,11 +296,25 @@ fn main() {
 		.and_then(|i| args.get(i + 1))
 		.map(|s| s.to_string())
 		.unwrap_or_else(|| "default_wallet".to_string());
-		
-	let server = args.iter().position(|arg| arg == "--o")
-		.and_then(|i| args.get(i + 1))
-		.map(|s| s.to_string())
-		.unwrap_or_else(|| "pokio.xyz".to_string());
+	
+	let http_timing: u64;
+	let server: String;
+	
+	if http_mode == 0 {
+		http_timing = 10;
+		server = args.iter().position(|arg| arg == "--o")
+			.and_then(|i| args.get(i + 1))
+			.map(|s| s.to_string())
+			.unwrap_or_else(|| "pokio.xyz".to_string());
+	}
+	else
+	{
+		http_timing = 1;
+		server = args.iter().position(|arg| arg == "--o")
+			.and_then(|i| args.get(i + 1))
+			.map(|s| s.to_string())
+			.unwrap_or_else(|| "node1.pokio.xyz".to_string());
+	}
 		
 	let intensity = args.iter().position(|arg| arg == "--i")
 		.and_then(|i| args.get(i + 1))
@@ -313,7 +330,7 @@ fn main() {
 	};
 	
 	if wallet == "default_wallet" {
-		println!("Usage: pokiominer.exe --w your_wallet_address [OPTIONS]");
+		println!("Usage: pokiominer --w your_wallet_address [OPTIONS]");
 		println!();
 		println!("Required:");
 		println!("  --w wallet	  Provide your wallet address.");
@@ -321,10 +338,10 @@ fn main() {
 		println!("Options:");
 		println!("  --o server_url  Specify the server URL to connect to. (default: pokio.xyz)");
 		println!("  --t threads     Set the number of threads to use (default: 1).");
-		println!("  --i intensity   Set the intensity (from 1 [more coins] to 5 [more blocks]) (default: 3).");
+		println!("  --i intensity   Set the intensity (from 1 [more blocks] to 5 [more coins]) (default: 3).");
 		println!();
 		println!("Example:");
-		println!("  pokiominer.exe --w your_wallet_address --t 4");
+		println!("  pokiominer --w your_wallet_address --t 4");
 		process::exit(0);
 	}
 	
@@ -336,7 +353,7 @@ fn main() {
 	let mut sys = System::new_all();
 	sys.refresh_all();
 
-	println!("POKIO MINER 0.1");
+	println!("POKIO MINER 0.2");
 	println!("");
 	
 	let total_memory = sys.total_memory() / 1024 / 1024;
@@ -364,7 +381,7 @@ fn main() {
 	let pwallet = wallet.clone();
 	let clientid = client_id.clone();
 	handles.push(thread::spawn(move || {
-		fetch_password(password_clone, hash_count_clone, pserver, pwallet, clientid, intensity_v);
+		fetch_password(password_clone, hash_count_clone, pserver, pwallet, clientid, intensity_v, http_timing);
 	}));
 
 	// updater thread

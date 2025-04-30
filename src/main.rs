@@ -154,7 +154,8 @@ fn fetch_password(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64>>, pse
 				"id": clientid,
 				"method": "getMiningTemplate",
 				"coins": tocoins_str,
-				"miner": &wallet
+				"miner": &wallet,
+				"hr": hr.to_string()
 		});
 
 		match client.post(&base_url)
@@ -240,7 +241,8 @@ fn connect_to_nng_server(password: Arc<Mutex<String>>, hash_count: Arc<Mutex<u64
 							"id": clientid,
 							"method": "getMiningTemplate",
 							"coins": tocoins_str,
-							"miner": &wallet
+							"miner": &wallet,
+							"hr": hr.to_string()
 					});
 
 					match client.post(&base_url)
@@ -296,6 +298,11 @@ fn main() {
 		.and_then(|i| args.get(i + 1))
 		.map(|s| s.to_string())
 		.unwrap_or_else(|| "default_wallet".to_string());
+	
+	let client_id = args.iter().position(|arg| arg == "--p")
+		.and_then(|i| args.get(i + 1))
+		.map(|s| s.to_string())
+		.unwrap_or_else(|| generate_random_string(8).to_string());
 	
 	let http_timing: u64;
 	let server: String;
@@ -355,22 +362,15 @@ fn main() {
 
 	println!("POKIO MINER 0.2");
 	println!("");
-	
 	let total_memory = sys.total_memory() / 1024 / 1024;
 	let cpu_model = sys.cpus().get(0).map(|cpu| cpu.brand().to_string()).unwrap_or("Unknown".to_string());
-
 	println!("Total RAM: {}",  format!("{} MB", total_memory));
 	println!("CPU Model: {}\n", cpu_model.trim());
-
 	println!("{} Start mining with {} threads...", Local::now().format("[%H:%M:%S]").to_string(), num_threads);
 
 	let hash_count = Arc::new(Mutex::new(0));
 	let start_time = Instant::now();
-
-	// template to mine
 	let password = Arc::new(Mutex::new("0-0-100000000-100".to_string()));
-	let client_id = generate_random_string(8).to_string();
-
 	let mut handles = vec![];
 	
 	// updater thread
